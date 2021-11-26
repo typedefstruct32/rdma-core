@@ -1,0 +1,5 @@
+# make rsocketdemo:
+
+ gcc server.c -libverbs -lrdmacm -Wl,-rpath,/home/kyo/cpp/rdma-core/build/lib -o server
+ gcc server.c -Wl,-rpath,/home/kyo/cpp/rdma-core/build/lib -libverbs -lrdmacm -o server
+ gcc server.c -L /home/kyo/cpp/rdma-core/build/lib -Wl,-rpath,/home/kyo/cpp/rdma-core/build/lib -libverbs -lrdmacm -o server

@@ -152,7 +152,7 @@ static int send_xfer(int size)
 
 	if (verify)
 		format_buf(buf, size);
-
+	
 	if (use_async) {
 		fds.fd = rs;
 		fds.events = POLLOUT;
@@ -161,8 +161,11 @@ static int send_xfer(int size)
 	for (offset = 0; offset < size; ) {
 		if (use_async) {
 			ret = do_poll(&fds, poll_timeout);
+			printf("fds.revents=%d", fds.revents);
 			if (ret)
-				return ret;
+				if (fds.revents & POLLHUP) 
+					printf("recv POLLHUP\n");
+			return ret;
 		}
 
 		ret = rs_send(rs, buf + offset, size - offset, flags);
@@ -181,15 +184,18 @@ static int recv_xfer(int size)
 {
 	struct pollfd fds;
 	int offset, ret;
-
 	if (use_async) {
 		fds.fd = rs;
 		fds.events = POLLIN;
 	}
-
 	for (offset = 0; offset < size; ) {
 		if (use_async) {
+			printf("use_async\n");
 			ret = do_poll(&fds, poll_timeout);
+			printf("fds.revents=%d\n", fds.revents);
+			if (ret)
+				if (fds.revents & POLLHUP) 
+					printf("recv POLLHUP\n");
 			if (ret)
 				return ret;
 		}
@@ -501,7 +507,6 @@ free:
 static int run(void)
 {
 	int i, ret = 0;
-
 	buf = malloc(!custom ? test_size[TEST_CNT - 1].size : transfer_size);
 	if (!buf) {
 		perror("malloc");

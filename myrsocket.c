@@ -31,7 +31,7 @@
  *
  */
 #define _GNU_SOURCE
-#include <config.h>
+#include "build/include/config.h"
 
 #include <sys/types.h>
 #include <sys/socket.h>
@@ -50,15 +50,15 @@
 #include <search.h>
 #include <time.h>
 #include <byteswap.h>
-#include <util/compiler.h>
-#include <util/util.h>
-#include <ccan/container_of.h>
+#include "util/compiler.h"
+#include "util/util.h"
+#include "ccan/container_of.h"
 
 #include <rdma/rdma_cma.h>
 #include <rdma/rdma_verbs.h>
 #include <rdma/rsocket.h>
-#include "cma.h"
-#include "indexer.h"
+#include "librdmacm/cma.h"
+#include "librdmacm/indexer.h"
 
 #define RS_OLAP_START_SIZE 2048
 #define RS_MAX_TRANSFER 65536
@@ -123,11 +123,6 @@ static struct rs_svc connect_svc = {
 	.context_size = sizeof(struct pollfd),
 	.run = cm_svc_run
 };
-static struct rs_svc client_svc = {
-	.context_size = sizeof(struct pollfd),
-	.run = cm_svc_run
-};
-
 
 static uint32_t pollcnt;
 static bool suspendpoll;
@@ -478,15 +473,14 @@ static int rs_notify_svc(struct rs_svc *svc, struct rsocket *rs, int cmd)
 {
 	struct rs_svc_msg msg;
 	int ret;
-	printf("in notify_svc\n");
-	printf("cmd = %d\n", cmd);
+
 	pthread_mutex_lock(&svc_mut);
 	if (!svc->cnt) {
 		ret = socketpair(AF_UNIX, SOCK_STREAM, 0, svc->sock);
 		if (ret)
 			goto unlock;
 
-		ret = pthread_create(&svc->id, NULL, svc->run, svc);  //svc->id 是pthread id,最后一个为线程传参
+		ret = pthread_create(&svc->id, NULL, svc->run, svc);
 		if (ret) {
 			ret = ERR(ret);
 			goto closepair;
@@ -1223,7 +1217,7 @@ int rbind(int socket, const struct sockaddr *addr, socklen_t addrlen)
 {
 	struct rsocket *rs;
 	int ret;
-	printf("rsocket.cpp\n");
+    printf("MyRsocket.cpp\n");
 	rs = idm_lookup(&idm, socket);
 	if (!rs)
 		return ERR(EBADF);
@@ -1348,8 +1342,7 @@ int raccept(int socket, struct sockaddr *addr, socklen_t *addrlen)
 	ret = read(rs->accept_queue[0], &new_rs, sizeof(new_rs));
 	if (ret != sizeof(new_rs))
 		return ret;
-	
-	ret = rs_notify_svc(&client_svc, new_rs, RS_SVC_ADD_CM); // 在这里加入新的svc用来监控client_fd的rdma_cmevent事件处理
+
 	if (addr && addrlen)
 		rgetpeername(new_rs->index, addr, addrlen);
 	return new_rs->index;
@@ -3322,7 +3315,7 @@ int rpoll(struct pollfd *fds, nfds_t nfds, int timeout)
 	uint64_t start_time = 0;
 	uint32_t poll_time;
 	int pollsleep, ret;
-
+    printf("MyRsocket.cpp Rpoll\n");
 	do {
 		ret = rs_poll_check(fds, nfds);
 		if (ret || !timeout)
@@ -3549,8 +3542,6 @@ int rclose(int socket)
 			rs_notify_svc(&listen_svc, rs, RS_SVC_REM_CM);
 		if (rs->opts & RS_OPT_CM_SVC)
 			rs_notify_svc(&connect_svc, rs, RS_SVC_REM_CM);
-		if (rs->opts & RS_OPT_CM_SVC)
-			rs_notify_svc(&client_svc, rs, RS_SVC_REM_CM);
 	} else {
 		ds_shutdown(rs);
 	}
@@ -4619,7 +4610,7 @@ static void cm_svc_process_sock(struct rs_svc *svc)
 		msg.status = rs_svc_add_rs(svc, msg.rs);
 		if (!msg.status) {
 			msg.rs->opts |= RS_OPT_CM_SVC;
-			fds = svc->contexts;                                  //在这里往svc->contexts上扔fds。
+			fds = svc->contexts;
 			fds[svc->cnt].fd = msg.rs->cm_id->channel->fd;
 			fds[svc->cnt].events = POLLIN;
 			fds[svc->cnt].revents = 0;
@@ -4645,14 +4636,15 @@ static void *cm_svc_run(void *arg)
 	struct pollfd *fds;
 	struct rs_svc_msg msg;
 	int i, ret;
-	ret = rs_svc_grow_sets(svc, 4);   //只做了svc的空间分配，初始化0.
+
+	ret = rs_svc_grow_sets(svc, 4);
 	if (ret) {
 		msg.status = ret;
 		write_all(svc->sock[1], &msg, sizeof(msg));
 		return (void *) (uintptr_t) ret;
 	}
 
-	fds = svc->contexts;   //实际上是将fds存到contexts中。
+	fds = svc->contexts;
 	fds[0].fd = svc->sock[1];
 	fds[0].events = POLLIN;
 	do {
@@ -4662,14 +4654,15 @@ static void *cm_svc_run(void *arg)
 		poll(fds, svc->cnt + 1, -1);
 		if (fds[0].revents)
 			cm_svc_process_sock(svc);
+
 		for (i = 1; i <= svc->cnt; i++) {
 			if (!fds[i].revents)
 				continue;
+
 			if (svc == &listen_svc)
 				rs_accept(svc->rss[i]);
-			else 
+			else
 				rs_handle_cm_event(svc->rss[i]);
-			
 		}
 	} while (svc->cnt >= 1);
 
