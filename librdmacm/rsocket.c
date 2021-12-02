@@ -481,6 +481,7 @@ static int rs_notify_svc(struct rs_svc *svc, struct rsocket *rs, int cmd)
 	printf("in notify_svc\n");
 	printf("cmd = %d\n", cmd);
 	pthread_mutex_lock(&svc_mut);
+	printf("svc->cnt:%d\n", svc->cnt);
 	if (!svc->cnt) {
 		ret = socketpair(AF_UNIX, SOCK_STREAM, 0, svc->sock);
 		if (ret)
@@ -1223,7 +1224,7 @@ int rbind(int socket, const struct sockaddr *addr, socklen_t addrlen)
 {
 	struct rsocket *rs;
 	int ret;
-	printf("rsocket.cpp\n");
+	printf("myLatestRsocket.cpp\n");
 	rs = idm_lookup(&idm, socket);
 	if (!rs)
 		return ERR(EBADF);
@@ -4600,8 +4601,11 @@ static void rs_handle_cm_event(struct rsocket *rs)
 	} else {
 		ret = ucma_complete(rs->cm_id);
 		if (!ret && rs->cm_id->event && (rs->state & rs_connected) &&
-		    (rs->cm_id->event->event == RDMA_CM_EVENT_DISCONNECTED))
-			rs->state = rs_disconnected;
+		    (rs->cm_id->event->event == RDMA_CM_EVENT_DISCONNECTED)) {
+				rs->state = rs_disconnected;
+				printf("rs_handle_cm_event got RDMA_CM_EVENT_DISCONNECTED and try to close rs\n");
+				rclose(rs);
+			}
 	}
 
 	if (!(rs->state & rs_opening))
@@ -4661,10 +4665,11 @@ static void *cm_svc_run(void *arg)
 
 		poll(fds, svc->cnt + 1, -1);
 		if (fds[0].revents)
-			cm_svc_process_sock(svc);
+			cm_svc_process_sock(svc);      //在这里read处所有rs_notify_svc write的msg事件，执行对应的操作。
 		for (i = 1; i <= svc->cnt; i++) {
 			if (!fds[i].revents)
-				continue;
+				continue;                 //直到fds[i]有revent。这里fds通过svc->context上下文传递到process_sock中。
+			printf("%d get revents\n", i);
 			if (svc == &listen_svc)
 				rs_accept(svc->rss[i]);
 			else 
