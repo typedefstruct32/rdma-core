@@ -925,6 +925,7 @@ static int rs_create_ep(struct rsocket *rs)
 	qp_attr.cap.max_inline_data = rs->sq_inline;
 
 	ret = rdma_create_qp(rs->cm_id, NULL, &qp_attr);
+	printf("rdma_create_qp(%d)\n", rs->cm_id->qp->qp_num);
 	if (ret)
 		return ret;
 
@@ -1065,6 +1066,7 @@ static void rs_free(struct rsocket *rs)
 		rs_free_iomappings(rs);
 		if (rs->cm_id->qp) {
 			ibv_ack_cq_events(rs->cm_id->recv_cq, rs->unack_cqe);
+			printf("rdma_destroy_qp(%d)\n", rs->cm_id->qp->qp_num);
 			rdma_destroy_qp(rs->cm_id);
 		}
 		rdma_destroy_id(rs->cm_id);
@@ -1364,11 +1366,14 @@ static int rs_do_connect(struct rsocket *rs)
 	int to, ret;
 
 	fastlock_acquire(&rs->slock);
+	printf("rs->state(%d)\n", rs->state);
 	switch (rs->state) {
 	case rs_init:
 	case rs_bound:
 resolve_addr:
+		printf("resolve_Addr()\n");
 		to = 1000 << rs->retries++;
+		printf("to(%d), rs->retries(%d)\n", to, rs->retries);
 		ret = rdma_resolve_addr(rs->cm_id, NULL,
 					&rs->cm_id->route.addr.dst_addr, to);
 		if (!ret)
@@ -1386,7 +1391,9 @@ resolve_addr:
 
 		rs->retries = 0;
 resolve_route:
+		printf("resolve_route()\n");
 		to = 1000 << rs->retries++;
+		printf("to(%d), rs->retries(%d)\n", to, rs->retries);
 		if (rs->optval) {
 			ret = rdma_set_option(rs->cm_id,  RDMA_OPTION_IB,
 					      RDMA_OPTION_IB_PATH, rs->optval,
@@ -1398,7 +1405,8 @@ resolve_route:
 				goto resolving_route;
 			}
 		} else {
-			ret = rdma_resolve_route(rs->cm_id, to);
+			ret = rdma_resolve_route(rs->cm_id, to);   //return 0 on success,or -1 on error. If an error occurs, errno will be set to indicate the failure reason
+			printf("rdma_resolve_route ret(%d)\n", ret);
 			if (!ret)
 				goto do_connect;
 		}
@@ -1407,17 +1415,21 @@ resolve_route:
 		break;
 	case rs_resolving_route:
 resolving_route:
-		ret = ucma_complete(rs->cm_id);
+		printf("resolving_route()\n");
+		ret = ucma_complete(rs->cm_id);     //return 0 on success
+		printf("ucma_complete(%d)\n", ret);
 		if (ret) {
 			if (errno == ETIMEDOUT && rs->retries <= RS_CONN_RETRIES)
 				goto resolve_route;
 			break;
 		}
 do_connect:
-		ret = rs_create_ep(rs);
+		printf("do_connect\n");
+		ret = rs_create_ep(rs);  // 0 on success; 此处为一个链接分配qp和cq
+		printf("rs_create_ep(%d)\n", ret);
 		if (ret)
 			break;
-
+		printf("rs->cm_id(%d), rs->qp(%d)\n", rs->cm_id, rs->cm_id->qp);
 		memset(&param, 0, sizeof param);
 		creq = (void *) &cdata + rs_conn_data_offset(rs);
 		rs_format_conn_data(rs, creq);
@@ -4665,7 +4677,7 @@ static void *cm_svc_run(void *arg)
 
 		poll(fds, svc->cnt + 1, -1);
 		if (fds[0].revents)
-			cm_svc_process_sock(svc);      //在这里read处所有rs_notify_svc write的msg事件，执行对应的操作。
+			cm_svc_process_sock(svc);      //在这里read完所有rs_notify_svc write的msg事件，执行对应的操作。
 		for (i = 1; i <= svc->cnt; i++) {
 			if (!fds[i].revents)
 				continue;                 //直到fds[i]有revent。这里fds通过svc->context上下文传递到process_sock中。
