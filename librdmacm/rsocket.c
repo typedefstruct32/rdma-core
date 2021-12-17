@@ -436,14 +436,21 @@ struct ds_udp_header {
 static void write_all(int fd, const void *msg, size_t len)
 {
 	// FIXME: if fd is a socket this really needs to handle EINTR and other conditions.
-	ssize_t __attribute__((unused)) rc = write(fd, msg, len);
+	ssize_t __attribute__((unused)) rc;
+again:
+	if ((rc = write(fd, msg, len)) < 0) 
+		if (errno = EINTR) 
+			goto again;
 	assert(rc == len);
 }
 
 static void read_all(int fd, void *msg, size_t len)
 {
 	// FIXME: if fd is a socket this really needs to handle EINTR and other conditions.
-	ssize_t __attribute__((unused)) rc = read(fd, msg, len);
+	ssize_t __attribute__((unused)) rc;
+again:
+	if ((rc = read(fd, msg, len)) < 0) 
+		if (errno = EINTR) goto again;
 	assert(rc == len);
 }
 
@@ -1226,7 +1233,7 @@ int rbind(int socket, const struct sockaddr *addr, socklen_t addrlen)
 {
 	struct rsocket *rs;
 	int ret;
-	printf("myLatestRsocket.cpp\n");
+	printf("12/17/16:14 version\n");
 	rs = idm_lookup(&idm, socket);
 	if (!rs)
 		return ERR(EBADF);
@@ -4261,7 +4268,7 @@ static int rs_svc_index(struct rs_svc *svc, struct rsocket *rs)
 static int rs_svc_rm_rs(struct rs_svc *svc, struct rsocket *rs)
 {
 	int i;
-
+	printf("rs_svc_rm_rs\n");
 	if ((i = rs_svc_index(svc, rs)) >= 0) {
 		svc->rss[i] = svc->rss[svc->cnt];
 		memcpy(svc->contexts + i * svc->context_size,
@@ -4615,8 +4622,8 @@ static void rs_handle_cm_event(struct rsocket *rs)
 		if (!ret && rs->cm_id->event && (rs->state & rs_connected) &&
 		    (rs->cm_id->event->event == RDMA_CM_EVENT_DISCONNECTED)) {
 				rs->state = rs_disconnected;
-				printf("rs_handle_cm_event got RDMA_CM_EVENT_DISCONNECTED and try to close rs\n");
-				rclose(rs);
+				printf("rs_handle_cm_event got RDMA_CM_EVENT_DISCONNECTED and assign rs->state to rs_disconnected\n");
+				//rclose(rs);
 			}
 	}
 
@@ -4684,9 +4691,11 @@ static void *cm_svc_run(void *arg)
 			printf("%d get revents\n", i);
 			if (svc == &listen_svc)
 				rs_accept(svc->rss[i]);
-			else 
+			else  {
 				rs_handle_cm_event(svc->rss[i]);
-			
+				if (svc->rss[i]->state == rs_disconnected)
+					rs_svc_rm_rs(svc, svc->rss[i]);
+			}
 		}
 	} while (svc->cnt >= 1);
 
