@@ -485,10 +485,7 @@ static int rs_notify_svc(struct rs_svc *svc, struct rsocket *rs, int cmd)
 {
 	struct rs_svc_msg msg;
 	int ret;
-	printf("in notify_svc\n");
-	printf("cmd = %d\n", cmd);
 	pthread_mutex_lock(&svc_mut);
-	printf("svc->cnt:%d\n", svc->cnt);
 	if (!svc->cnt) {
 		ret = socketpair(AF_UNIX, SOCK_STREAM, 0, svc->sock);
 		if (ret)
@@ -1355,7 +1352,7 @@ int raccept(int socket, struct sockaddr *addr, socklen_t *addrlen)
 	if (rs->state != rs_listening)
 		return ERR(EBADF);
 
-	ret = read(rs->accept_queue[0], &new_rs, sizeof(new_rs));
+	ret = read(rs->accept_queue[0], &new_rs, sizeof(new_rs));  //这里是一个阻塞调用
 	if (ret != sizeof(new_rs))
 		return ret;
 	
@@ -1729,7 +1726,7 @@ int rconnect(int socket, const struct sockaddr *addr, socklen_t addrlen)
 		if (ret == -1 && errno == EINPROGRESS) {
 			save_errno = errno;
 			/* The app can still drive the CM state on failure */
-			rs_notify_svc(&connect_svc, rs, RS_SVC_ADD_CM);
+			rs_notify_svc(&connect_svc, rs, RS_SVC_ADD_CM);     //在connect_svc中，handle_cm_event时会对rs的状态进行判断，调用rs_do_connect()
 			errno = save_errno;
 		}
 	} else {
@@ -3702,7 +3699,7 @@ int rsetsockopt(int socket, int level, int optname,
 			ret = 0;
 			break;
 		case SO_KEEPALIVE:
-			ret = rs_set_keepalive(rs, *(int *) optval);
+			ret = rs_set_keepalive(rs, *(int *) optval);  //开启keep_alive选项，
 			opt_on = rs->opts & RS_OPT_KEEPALIVE;
 			break;
 		case SO_OOBINLINE:
@@ -4268,7 +4265,6 @@ static int rs_svc_index(struct rs_svc *svc, struct rsocket *rs)
 static int rs_svc_rm_rs(struct rs_svc *svc, struct rsocket *rs)
 {
 	int i;
-	printf("rs_svc_rm_rs\n");
 	if ((i = rs_svc_index(svc, rs)) >= 0) {
 		svc->rss[i] = svc->rss[svc->cnt];
 		memcpy(svc->contexts + i * svc->context_size,
@@ -4516,7 +4512,7 @@ static uint64_t rs_get_time(void)
 	return rs_time_us() / 1000000;
 }
 
-static void tcp_svc_process_sock(struct rs_svc *svc)
+static void tcp_svc_process_sock(struct rs_svc *svc)  //该svc只处理tcp keepalive相关的选项处理
 {
 	struct rs_svc_msg msg;
 	int i;
@@ -4598,7 +4594,7 @@ static void *tcp_svc_run(void *arg)
 		next_timeout = ~0;
 		for (i = 1; i <= svc->cnt; i++) {
 			if (tcp_svc_timeouts[i] <= now) {
-				tcp_svc_send_keepalive(svc->rss[i]);
+				tcp_svc_send_keepalive(svc->rss[i]);          //Send a 0 byte RDMA write with immediate as keep-alive message.
 				tcp_svc_timeouts[i] =
 					now + svc->rss[i]->keepalive_time;
 			}
@@ -4616,13 +4612,13 @@ static void rs_handle_cm_event(struct rsocket *rs)
 	int ret;
 
 	if (rs->state & rs_opening) {
-		rs_do_connect(rs);
+		rs_do_connect(rs);    //如果还未connect成功，有epollin事件代表可以继续尝试连接
 	} else {
 		ret = ucma_complete(rs->cm_id);
 		if (!ret && rs->cm_id->event && (rs->state & rs_connected) &&
 		    (rs->cm_id->event->event == RDMA_CM_EVENT_DISCONNECTED)) {
 				rs->state = rs_disconnected;
-				printf("rs_handle_cm_event got RDMA_CM_EVENT_DISCONNECTED and assign rs->state to rs_disconnected\n");
+				//printf("rs_handle_cm_event got RDMA_CM_EVENT_DISCONNECTED and assign rs->state to rs_disconnected\n");
 				//rclose(rs);
 			}
 	}
@@ -4635,7 +4631,6 @@ static void cm_svc_process_sock(struct rs_svc *svc)
 {
 	struct rs_svc_msg msg;
 	struct pollfd *fds;
-
 	read_all(svc->sock[1], &msg, sizeof(msg));
 	switch (msg.cmd) {
 	case RS_SVC_ADD_CM:
@@ -4677,27 +4672,29 @@ static void *cm_svc_run(void *arg)
 
 	fds = svc->contexts;   //实际上是将fds存到contexts中。
 	fds[0].fd = svc->sock[1];
-	fds[0].events = POLLIN;
+	fds[0].events = POLLIN;  //关注rs的poll in
 	do {
 		for (i = 0; i <= svc->cnt; i++)
 			fds[i].revents = 0;
 
 		poll(fds, svc->cnt + 1, -1);
-		if (fds[0].revents)
+		if (fds[0].revents) {
 			cm_svc_process_sock(svc);      //在这里read完所有rs_notify_svc write的msg事件，执行对应的操作。
+		}
 		for (i = 1; i <= svc->cnt; i++) {
 			if (!fds[i].revents)
 				continue;                 //直到fds[i]有revent。这里fds通过svc->context上下文传递到process_sock中。
-			printf("%d get revents\n", i);
 			if (svc == &listen_svc)
 				rs_accept(svc->rss[i]);
 			else  {
 				rs_handle_cm_event(svc->rss[i]);
-				if (svc->rss[i]->state == rs_disconnected)
-					rs_svc_rm_rs(svc, svc->rss[i]);
+				if (svc->rss[i]->state == rs_disconnected) {
+					int status = rs_svc_rm_rs(svc, svc->rss[i]);  //关闭因非正常关闭(不通过rclose)的对端引起的event
+					if (!status)
+						svc->rss[i]->opts &= ~RS_OPT_CM_SVC; 
+				}
 			}
 		}
 	} while (svc->cnt >= 1);
-
 	return NULL;
 }
