@@ -1230,7 +1230,7 @@ int rbind(int socket, const struct sockaddr *addr, socklen_t addrlen)
 {
 	struct rsocket *rs;
 	int ret;
-	printf("12/17/16:14 version\n");
+	printf("12/21/18:31 version\n");
 	rs = idm_lookup(&idm, socket);
 	if (!rs)
 		return ERR(EBADF);
@@ -1370,7 +1370,7 @@ static int rs_do_connect(struct rsocket *rs)
 	int to, ret;
 
 	fastlock_acquire(&rs->slock);
-	printf("rs->state(%d)\n", rs->state);
+	//printf("rs->state(%d)\n", rs->state);
 	switch (rs->state) {
 	case rs_init:
 	case rs_bound:
@@ -1421,7 +1421,7 @@ resolve_route:
 resolving_route:
 		printf("resolving_route()\n");
 		ret = ucma_complete(rs->cm_id);     //return 0 on success
-		printf("ucma_complete(%d)\n", ret);
+		//printf("ucma_complete(%d)\n", ret);
 		if (ret) {
 			if (errno == ETIMEDOUT && rs->retries <= RS_CONN_RETRIES)
 				goto resolve_route;
