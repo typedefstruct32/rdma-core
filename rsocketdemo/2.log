@@ -1,0 +1,31 @@
+rconnect EINPROGRESS: Operation now in progress
+rs->state(0)
+resolve_Addr()
+to(1000), rs->retries(1)
+in notify_svc
+cmd = 6
+svc->cnt:0
+cm_svc_process_sock
+RS_SVC_ADD_CMrs->state(20)
+resolve_route()
+to(1000), rs->retries(1)
+rdma_resolve_route ret(0)
+do_connect
+rdma_create_qp(28)
+rs_create_ep(0)
+rs->cm_id(1085744960), rs->qp(1085760336)
+connected with destination host...
+Input your world:>
+before rsend rpolled 4
+ will rsend
+ rsend return 3, data is 111
+before rrecv rpolled 1
+ will rrecv
+recv 3, data is 111
+sleep 2 sec, then close socket 3
+in notify_svc
+cmd = 7
+svc->cnt:1
+cm_svc_process_sock
+RS_SVC_REM_CMrs_svc_rm_rs
+rdma_destroy_qp(28)
