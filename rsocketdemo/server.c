@@ -18,7 +18,7 @@
 #include <pthread.h>
 
 static const char *port = "5556";
-static const char *src_addr = "172.20.10.8";
+static const char *src_addr = "172.20.10.11";
 /*
  监听后，一直处于accept阻塞状态，
  直到有客户端连接，

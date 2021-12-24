@@ -123,11 +123,11 @@ static struct rs_svc connect_svc = {
 	.context_size = sizeof(struct pollfd),
 	.run = cm_svc_run
 };
-/*static struct rs_svc client_svc = {
+static struct rs_svc client_svc = {
 	.context_size = sizeof(struct pollfd),
 	.run = cm_svc_run
 };
-*/
+
 
 static uint32_t pollcnt;
 static bool suspendpoll;
@@ -1356,7 +1356,7 @@ int raccept(int socket, struct sockaddr *addr, socklen_t *addrlen)
 	if (ret != sizeof(new_rs))
 		return ret;
 	
-	ret = rs_notify_svc(&connect_svc, new_rs, RS_SVC_ADD_CM); // 在这里加入新的svc用来监控client_fd的rdma_cmevent事件处理
+	ret = rs_notify_svc(&client_svc, new_rs, RS_SVC_ADD_CM); // 在这里加入新的svc用来监控client_fd的rdma_cmevent事件处理
 	if (addr && addrlen)
 		rgetpeername(new_rs->index, addr, addrlen);
 	return new_rs->index;
@@ -3566,8 +3566,8 @@ int rclose(int socket)
 			rs_notify_svc(&listen_svc, rs, RS_SVC_REM_CM);
 		if (rs->opts & RS_OPT_CM_SVC)
 			rs_notify_svc(&connect_svc, rs, RS_SVC_REM_CM);
-		//if (rs->opts & RS_OPT_CM_SVC)
-		//		rs_notify_svc(&client_svc, rs, RS_SVC_REM_CM);  //将client_svc的监控合并到connect_svc中
+		if (rs->opts & RS_OPT_CM_SVC)
+			rs_notify_svc(&client_svc, rs, RS_SVC_REM_CM);  //将client_svc的监控合并到connect_svc中
 	} else {
 		ds_shutdown(rs);
 	}
