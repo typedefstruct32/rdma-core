@@ -656,7 +656,7 @@ int rdma_get_cm_event(struct rdma_event_channel *channel,
  * See also:
  *   rdma_get_cm_event, rdma_destroy_id
  */
-int rdma_ack_cm_event(struct rdma_cm_event *event);
+int rdma_ack_cm_event(struct rdma_cm_event **event);
 
 __be16 rdma_get_src_port(struct rdma_cm_id *id);
 __be16 rdma_get_dst_port(struct rdma_cm_id *id);

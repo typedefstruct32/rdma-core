@@ -71,6 +71,7 @@
 static struct index_map idm;
 static pthread_mutex_t mut = PTHREAD_MUTEX_INITIALIZER;
 static pthread_mutex_t svc_mut = PTHREAD_MUTEX_INITIALIZER;
+static pthread_mutex_t svc_mut2 = PTHREAD_MUTEX_INITIALIZER;
 
 struct rsocket;
 
@@ -929,7 +930,7 @@ static int rs_create_ep(struct rsocket *rs)
 	qp_attr.cap.max_inline_data = rs->sq_inline;
 
 	ret = rdma_create_qp(rs->cm_id, NULL, &qp_attr);
-	printf("rdma_create_qp(%d)\n", rs->cm_id->qp->qp_num);
+	//printf("rdma_create_qp(%d)\n", rs->cm_id->qp->qp_num); //rdma_create_qp不成功时这句会core
 	if (ret)
 		return ret;
 
@@ -4227,8 +4228,13 @@ static int rs_svc_grow_sets(struct rs_svc *svc, int grow_size)
 		memcpy(rss, svc->rss, sizeof(*rss) * (svc->cnt + 1));
 		memcpy(contexts, svc->contexts, svc->context_size * (svc->cnt + 1));
 	}
-
-	free(svc->rss);
+	
+	pthread_mutex_lock(&svc_mut2);
+	if (svc->rss) {
+		free(svc->rss);
+		svc->rss = NULL;
+	}
+	pthread_mutex_unlock(&svc_mut2);
 	svc->rss = rss;
 	svc->contexts = contexts;
 	return 0;

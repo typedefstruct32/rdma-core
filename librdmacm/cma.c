@@ -61,6 +61,8 @@
 #include <util/rdma_nl.h>
 #include <ccan/list.h>
 
+#include <sys/syscall.h>
+
 #define CMA_INIT_CMD(req, req_size, op)		\
 do {						\
 	memset(req, 0, req_size);		\
@@ -141,12 +143,57 @@ static LIST_HEAD(cma_dev_list);
 /* sorted based or index or guid, depends on kernel support */
 static struct ibv_device **dev_list;
 static pthread_mutex_t mut = PTHREAD_MUTEX_INITIALIZER;
+static pthread_mutex_t getlock = PTHREAD_MUTEX_INITIALIZER;
+static pthread_mutex_t acklock = PTHREAD_MUTEX_INITIALIZER;
+static pthread_mutex_t evtNodelock = PTHREAD_MUTEX_INITIALIZER;
 static int abi_ver = -1;
 static char dev_name[64] = "rdma_cm";
 static dev_t dev_cdev;
 int af_ib_support;
 static struct index_map ucma_idm;
 static fastlock_t idm_lock;
+static int ack_num, thread_cnt = 0, thread_cnt2 = 0;
+
+typedef struct evtNode {
+	struct cma_event *node;
+	struct evtNode *next;
+}evtNode;
+
+evtNode *evtHead = NULL;
+
+static int get_evtnode_free(struct cma_event * p) 
+{
+	//pthread_mutex_lock(&evtNodelock);
+	evtNode *cur = evtHead;
+	while (cur) {
+		if (cur->node == p) 
+			return 1;
+		cur = cur->next;
+	}
+	//pthread_mutex_unlock(&evtNodelock);
+	return 0;
+}
+
+static int set_evtnode_free(struct cma_event *p) 
+{
+	//pthread_mutex_lock(&evtNodelock);
+	evtNode *cur = evtHead;
+	evtNode * pre = evtHead;
+	while (cur) {
+		if (cur->node == p) {
+			if (cur == evtHead) 
+				evtHead = cur->next;
+			else 
+				pre->next = cur->next;
+			printf("evt(%p) is freed\n", p);
+			return 1;
+		}
+		cur = cur->next;
+		pre = cur;
+	}
+	//pthread_mutex_unlock(&evtNodelock);
+	return 0;
+}
 
 static int check_abi_version_nl_cb(struct nl_msg *msg, void *data)
 {
@@ -825,10 +872,12 @@ int rdma_destroy_id(struct rdma_cm_id *id)
 	ret = ucma_destroy_kern_id(id->channel->fd, id_priv->handle);
 	if (ret < 0)
 		return ret;
-
-	if (id_priv->id.event)
-		rdma_ack_cm_event(id_priv->id.event);
-
+	//pthread_mutex_lock(&acklock);
+	if (id_priv->id.event) {
+		rdma_ack_cm_event(&id_priv->id.event);
+		id_priv->id.event = NULL;
+	}
+	//pthread_mutex_unlock(&acklock);
 	pthread_mutex_lock(&id_priv->mut);
 	while (id_priv->events_completed < ret)
 		pthread_cond_wait(&id_priv->cond, &id_priv->mut);
@@ -1100,13 +1149,15 @@ int ucma_complete(struct rdma_cm_id *id)
 	id_priv = container_of(id, struct cma_id_private, id);
 	if (!id_priv->sync)
 		return 0;
-
+	//pthread_mutex_lock(&acklock);
 	if (id_priv->id.event) {
-		rdma_ack_cm_event(id_priv->id.event);
+		rdma_ack_cm_event(&id_priv->id.event);
 		id_priv->id.event = NULL;
 	}
-
+	//pthread_mutex_unlock(&acklock);
+	//pthread_mutex_lock(&getlock);
 	ret = rdma_get_cm_event(id_priv->id.channel, &id_priv->id.event);
+	//pthread_mutex_unlock(&getlock);
 	if (ret)
 		return ret;
 
@@ -1849,13 +1900,15 @@ int rdma_get_request(struct rdma_cm_id *listen, struct rdma_cm_id **id)
 	id_priv = container_of(listen, struct cma_id_private, id);
 	if (!id_priv->sync)
 		return ERR(EINVAL);
-
+	//pthread_mutex_lock(&acklock);
 	if (listen->event) {
-		rdma_ack_cm_event(listen->event);
+		rdma_ack_cm_event(&listen->event);
 		listen->event = NULL;
 	}
-
+	//pthread_mutex_unlock(&acklock);
+	//pthread_mutex_lock(&getlock);
 	ret = rdma_get_cm_event(listen->channel, &event);
+	//pthread_mutex_unlock(&getlock);
 	if (ret)
 		return ret;
 
@@ -2225,20 +2278,39 @@ static void ucma_complete_mc_event(struct cma_multicast *mc)
 	pthread_mutex_unlock(&mc->id_priv->mut);
 }
 
-int rdma_ack_cm_event(struct rdma_cm_event *event)
+int rdma_ack_cm_event(struct rdma_cm_event **event)
 {
+	//pthread_mutex_lock(&acklock);
+	if (*event == NULL) {
+		printf("************************************\n");
+		return ERR(EINVAL);
+	}
+	thread_cnt++;
 	struct cma_event *evt;
-
 	if (!event)
 		return ERR(EINVAL);
 
-	evt = container_of(event, struct cma_event, event);
+	evt = container_of(*event, struct cma_event, event);
 
 	if (evt->mc)
 		ucma_complete_mc_event(evt->mc);
 	else
 		ucma_complete_event(evt->id_priv);
-	free(evt);
+	//if (get_evtnode_free(evt)) {
+	//	set_evtnode_free(evt);
+	if (((uint64_t)(evt) & 0xffffff) != 0x000bb0) {
+		printf("free evt(%p)", evt);
+		free(evt);
+	} else
+	{
+		printf("unfree evt(%p)", evt);
+	}
+	//}
+
+	printf("thread_cnt(%d)", thread_cnt);
+	if (thread_cnt > 1) printf("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
+	thread_cnt = 0;
+	//pthread_mutex_unlock(&acklock);
 	return 0;
 }
 
@@ -2477,9 +2549,10 @@ int rdma_establish(struct rdma_cm_id *id)
 int rdma_get_cm_event(struct rdma_event_channel *channel,
 		      struct rdma_cm_event **event)
 {
+	
 	struct ucma_abi_event_resp resp = {};
 	struct ucma_abi_get_event cmd;
-	struct cma_event *evt;
+	struct cma_event *evt = NULL;
 	int ret;
 
 	ret = ucma_init();
@@ -2492,18 +2565,33 @@ int rdma_get_cm_event(struct rdma_event_channel *channel,
 	evt = malloc(sizeof(*evt));
 	if (!evt)
 		return ERR(ENOMEM);
-
+	// pthread_mutex_lock(&evtNodelock);
+	// evtNode *evtnode = (evtNode*) malloc(sizeof(evtNode));
+	// evtnode->node = evt;
+	// evtnode->next = NULL;
+	// if (evtHead) {
+	// 	evtNode * cur = evtHead;
+	// 	while (cur->next) 
+	// 		cur = cur->next;
+	// 	cur->next = evtnode;
+	// } else 
+	// 	evtHead = evtnode;
+	// pthread_mutex_unlock(&evtNodelock);
+	
 retry:
 	memset(evt, 0, sizeof(*evt));
 	CMA_INIT_CMD_RESP(&cmd, sizeof cmd, GET_EVENT, &resp, sizeof resp);
 	ret = write(channel->fd, &cmd, sizeof cmd);
 	if (ret != sizeof cmd) {
-		free(evt);
+		//if (get_evtnode_free(evt)) {
+		//	set_evtnode_free(evt);
+			free(evt);
+		//}
 		return (ret >= 0) ? ERR(ENODATA) : -1;
 	}
 
 	VALGRIND_MAKE_MEM_DEFINED(&resp, sizeof resp);
-
+	thread_cnt2++;
 	evt->event.event = resp.event;
 	/*
 	 * We should have a non-zero uid, except for connection requests.
@@ -2616,6 +2704,9 @@ retry:
 	}
 
 	*event = &evt->event;
+	printf("get_cm_event_thread_count(%d)\n", thread_cnt2);
+	if (thread_cnt2 > 1) printf("----------------------------------\n");
+	thread_cnt2 = 0;
 	return 0;
 }
 
@@ -2713,7 +2804,7 @@ int rdma_migrate_id(struct rdma_cm_id *id, struct rdma_event_channel *channel)
 
 	if (id_priv->sync) {
 		if (id->event) {
-			rdma_ack_cm_event(id->event);
+			rdma_ack_cm_event(&id->event);
 			id->event = NULL;
 		}
 		rdma_destroy_event_channel(id->channel);
