@@ -431,14 +431,21 @@ struct ds_udp_header {
 static void write_all(int fd, const void *msg, size_t len)
 {
 	// FIXME: if fd is a socket this really needs to handle EINTR and other conditions.
-	ssize_t __attribute__((unused)) rc = write(fd, msg, len);
+	ssize_t __attribute__((unused)) rc;
+again:
+	if ((rc = write(fd, msg, len)) < 0) 
+		if (EINTR == errno) 
+			goto again;
 	assert(rc == len);
 }
 
 static void read_all(int fd, void *msg, size_t len)
 {
 	// FIXME: if fd is a socket this really needs to handle EINTR and other conditions.
-	ssize_t __attribute__((unused)) rc = read(fd, msg, len);
+	ssize_t __attribute__((unused)) rc;
+again:
+	if ((rc = read(fd, msg, len)) < 0) 
+		if (EINTR == errno) goto again;
 	assert(rc == len);
 }
 
