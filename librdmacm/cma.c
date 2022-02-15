@@ -161,6 +161,19 @@ typedef struct evtNode {
 
 evtNode *evtHead = NULL;
 
+static void* myalloc(int nbytes) {
+	char* ret = malloc(nbytes + 24 + 24);
+	memset(ret, 0xBA, 24);
+	pthread_t tid = pthread_self();
+	*((int64_t*)((char*)ret + 8)) = tid;
+	memset(ret + 24, 0XEF, nbytes);
+	memset(ret + 24 + nbytes, 0XDC, 24);
+	if (nbytes > 0) ret[24] = 0xBE;
+	if (nbytes > 1) ret[nbytes + 24 - 1] = 0xFA;
+	ret += 24;
+	return (void*)ret;
+}
+
 static int get_evtnode_free(struct cma_event * p) 
 {
 	//pthread_mutex_lock(&evtNodelock);
@@ -826,6 +839,7 @@ static int rdma_create_id2(struct rdma_event_channel *channel,
 	VALGRIND_MAKE_MEM_DEFINED(&resp, sizeof resp);
 
 	id_priv->handle = resp.id;
+	printf("id_priv_handle(%d), resp.id(%d)\n", id_priv->handle, resp.id);
 	ucma_insert_id(id_priv);
 	*id = &id_priv->id;
 	return 0;
@@ -1219,6 +1233,7 @@ int rdma_resolve_addr(struct rdma_cm_id *id, struct sockaddr *src_addr,
 	CMA_INIT_CMD(&cmd, sizeof cmd, RESOLVE_IP);
 	id_priv = container_of(id, struct cma_id_private, id);
 	cmd.id = id_priv->handle;
+	printf("id_priv_handle(%d), cmd.id(%d)\n", id_priv->handle, cmd.id);
 	if (src_addr)
 		memcpy(&cmd.src_addr, src_addr, src_len);
 	memcpy(&cmd.dst_addr, dst_addr, dst_len);
@@ -2281,10 +2296,8 @@ static void ucma_complete_mc_event(struct cma_multicast *mc)
 int rdma_ack_cm_event(struct rdma_cm_event **event)
 {
 	//pthread_mutex_lock(&acklock);
-	if (*event == NULL) {
-		printf("************************************\n");
+	if (*event == NULL) 
 		return ERR(EINVAL);
-	}
 	thread_cnt++;
 	struct cma_event *evt;
 	if (!event)
@@ -2300,15 +2313,15 @@ int rdma_ack_cm_event(struct rdma_cm_event **event)
 	//	set_evtnode_free(evt);
 	if (((uint64_t)(evt) & 0xffffff) != 0x000bb0) {
 		printf("free evt(%p)", evt);
-		free(evt);
+		free((void*)evt - 24);
 	} else
 	{
-		printf("unfree evt(%p)", evt);
+		printf("free evt(%p) and make core", evt);
+		free((void*)evt - 24);
 	}
 	//}
 
 	printf("thread_cnt(%d)", thread_cnt);
-	if (thread_cnt > 1) printf("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
 	thread_cnt = 0;
 	//pthread_mutex_unlock(&acklock);
 	return 0;
@@ -2562,7 +2575,9 @@ int rdma_get_cm_event(struct rdma_event_channel *channel,
 	if (!event)
 		return ERR(EINVAL);
 
-	evt = malloc(sizeof(*evt));
+	//evt = (struct cma_event *)malloc(sizeof(*evt));
+	evt =  (struct cma_event *)myalloc(sizeof(*evt)); //magic
+	
 	if (!evt)
 		return ERR(ENOMEM);
 	// pthread_mutex_lock(&evtNodelock);
@@ -2585,7 +2600,7 @@ retry:
 	if (ret != sizeof cmd) {
 		//if (get_evtnode_free(evt)) {
 		//	set_evtnode_free(evt);
-			free(evt);
+			free((void*)evt - 24);
 		//}
 		return (ret >= 0) ? ERR(ENODATA) : -1;
 	}
@@ -2705,7 +2720,6 @@ retry:
 
 	*event = &evt->event;
 	printf("get_cm_event_thread_count(%d)\n", thread_cnt2);
-	if (thread_cnt2 > 1) printf("----------------------------------\n");
 	thread_cnt2 = 0;
 	return 0;
 }
